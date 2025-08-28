@@ -1,0 +1,6 @@
+{
+  "name": "VidGen AI",
+  "description": "An AI-powered video remixing tool. Upload a video, let AI generate a creative prompt, and remix it into a stunning new creation with the Gemini VEO model.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
