@@ -4,6 +4,7 @@
 */
 
 import { GoogleGenAI, GenerateContentResponse, Type } from "@google/genai";
+import { ConsistencyResult } from "../types";
 
 // Helper to convert a data URL to a Gemini API Part
 const dataUrlToPart = (dataUrl: string): { inlineData: { mimeType: string; data: string; } } => {
@@ -77,6 +78,70 @@ export const analyzeVideoFrame = async (frameDataUrl: string): Promise<{ title: 
         throw new Error("Analysis failed: The model returned an invalid JSON format.");
     }
 };
+
+/**
+ * Tests how consistent a text prompt is with a given video frame.
+ * @param frameDataUrl The data URL of the video frame.
+ * @param prompt The text prompt to test.
+ * @returns A promise that resolves to an object with a consistency score and explanation.
+ */
+export const testPromptConsistency = async (frameDataUrl: string, prompt: string): Promise<ConsistencyResult> => {
+    console.log(`Starting prompt consistency test.`);
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
+
+    const imagePart = dataUrlToPart(frameDataUrl);
+    const systemPrompt = `You are an expert film critic and AI assistant. Your task is to evaluate how well a given text prompt describes the provided image.
+- Analyze the image carefully, noting the subject, setting, mood, and key visual elements.
+- Analyze the text prompt.
+- Compare the prompt to the image and provide a consistency score from 0 to 100, where 100 is a perfect match and 0 is completely unrelated.
+- Provide a brief, one-sentence explanation for your score.
+- Respond ONLY with a valid JSON object.`;
+    
+    const userPrompt = `Image is provided. Text prompt to evaluate: "${prompt}"`;
+    const textPart = { text: userPrompt };
+
+    console.log('Sending frame and prompt to the model for consistency check...');
+    const response: GenerateContentResponse = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: { parts: [imagePart, textPart] },
+        config: {
+            systemInstruction: systemPrompt,
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                    score: { type: Type.NUMBER, description: "A consistency score from 0 to 100." },
+                    explanation: { type: Type.STRING, description: "A brief, one-sentence explanation for the score." }
+                },
+                required: ["score", "explanation"]
+            }
+        }
+    });
+    console.log('Received response from model for consistency check.', response);
+    
+    if (response.promptFeedback?.blockReason) {
+        const { blockReason, blockReasonMessage } = response.promptFeedback;
+        const errorMessage = `Consistency check request was blocked. Reason: ${blockReason}. ${blockReasonMessage || ''}`;
+        throw new Error(errorMessage);
+    }
+
+    const text = response.text?.trim();
+
+    if (!text) {
+        throw new Error("Consistency check failed: The model did not return a valid JSON object.");
+    }
+
+    try {
+        const result: ConsistencyResult = JSON.parse(text);
+        // Clamp the score to be within 0-100, just in case.
+        result.score = Math.max(0, Math.min(100, Math.round(result.score)));
+        return result;
+    } catch (e) {
+        console.error("Failed to parse JSON from consistency check response:", text);
+        throw new Error("Consistency check failed: The model returned an invalid JSON format.");
+    }
+};
+
 
 /**
  * Starts the asynchronous process of generating a video from a text prompt.

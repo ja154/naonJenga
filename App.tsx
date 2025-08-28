@@ -4,13 +4,13 @@
 */
 
 import React, { useState, useCallback, useEffect } from 'react';
-import { analyzeVideoFrame, startVideoGeneration, checkVideoGenerationStatus } from './services/geminiService';
+import { analyzeVideoFrame, startVideoGeneration, checkVideoGenerationStatus, testPromptConsistency } from './services/geminiService';
 import Header from './components/Header';
 import Spinner from './components/Spinner';
-import { MagicWandIcon } from './components/icons';
+import { MagicWandIcon, CheckCircleIcon } from './components/icons';
 import StartScreen from './components/StartScreen';
 import DescribePanel from './components/DescribePanel';
-import type { AnalysisResult } from './types';
+import type { AnalysisResult, ConsistencyResult } from './types';
 
 // Helper to extract a single frame from a video file as a data URL
 const extractFrame = (videoFile: File): Promise<string> => {
@@ -72,8 +72,10 @@ const App: React.FC = () => {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [editablePrompt, setEditablePrompt] = useState<string>('');
   const [generatedVideoUrl, setGeneratedVideoUrl] = useState<string | null>(null);
+  const [consistencyResult, setConsistencyResult] = useState<ConsistencyResult | null>(null);
   const [isLoadingAnalysis, setIsLoadingAnalysis] = useState<boolean>(false);
   const [isLoadingGeneration, setIsLoadingGeneration] = useState<boolean>(false);
+  const [isLoadingConsistency, setIsLoadingConsistency] = useState<boolean>(false);
   const [generationMessage, setGenerationMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -106,6 +108,7 @@ const App: React.FC = () => {
     setAnalysisResult(null);
     setEditablePrompt('');
     setGeneratedVideoUrl(null);
+    setConsistencyResult(null);
     setVideoFile(file);
   }, []);
 
@@ -118,6 +121,7 @@ const App: React.FC = () => {
     setIsLoadingAnalysis(true);
     setError(null);
     setAnalysisResult(null);
+    setConsistencyResult(null);
     
     try {
         const frameDataUrl = await extractFrame(videoFile);
@@ -133,6 +137,33 @@ const App: React.FC = () => {
     }
   }, [videoFile]);
 
+  const handleTestConsistency = useCallback(async () => {
+    if (!videoFile) {
+        setError('No video loaded to test consistency.');
+        return;
+    }
+    if (!editablePrompt.trim()) {
+        setError("Please enter a prompt to test.");
+        return;
+    }
+
+    setIsLoadingConsistency(true);
+    setConsistencyResult(null);
+    setError(null);
+
+    try {
+        const frameDataUrl = await extractFrame(videoFile);
+        const result = await testPromptConsistency(frameDataUrl, editablePrompt);
+        setConsistencyResult(result);
+    } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+        setError(`Failed to test consistency. ${errorMessage}`);
+        console.error(err);
+    } finally {
+        setIsLoadingConsistency(false);
+    }
+  }, [videoFile, editablePrompt]);
+  
   const handleGenerateVideo = useCallback(async () => {
     if (!editablePrompt.trim()) {
         setError("Please generate or enter a prompt first.");
@@ -190,6 +221,7 @@ const App: React.FC = () => {
       setError(null);
       setAnalysisResult(null);
       setEditablePrompt('');
+      setConsistencyResult(null);
       if (generatedVideoUrl) URL.revokeObjectURL(generatedVideoUrl);
       setGeneratedVideoUrl(null);
   }, [generatedVideoUrl]);
@@ -205,6 +237,12 @@ const App: React.FC = () => {
       }
   }, [generatedVideoUrl]);
   
+  const getScoreColor = (score: number) => {
+    if (score >= 75) return { text: 'text-green-300', bg: 'bg-green-500/10', border: 'border-green-500/20' };
+    if (score >= 50) return { text: 'text-yellow-300', bg: 'bg-yellow-500/10', border: 'border-yellow-500/20' };
+    return { text: 'text-red-300', bg: 'bg-red-500/10', border: 'border-red-500/20' };
+  };
+
   const renderContent = () => {
     if (error) {
        return (
@@ -227,7 +265,7 @@ const App: React.FC = () => {
 
     return (
       <div className="w-full max-w-6xl mx-auto flex flex-col items-center gap-6 animate-fade-in relative">
-        {isLoadingGeneration && <LoadingOverlay message={generationMessage || 'Processing...'} />}
+        {(isLoadingGeneration || isLoadingConsistency) && <LoadingOverlay message={isLoadingGeneration ? (generationMessage || 'Processing...') : 'AI is testing prompt consistency...'} />}
         
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">
             <div className="flex flex-col gap-2">
@@ -264,16 +302,37 @@ const App: React.FC = () => {
                       onChange={(e) => setEditablePrompt(e.target.value)}
                       placeholder="The generated cinematic prompt will appear here. You can edit it or write your own."
                       className="w-full h-24 bg-gray-900 border border-gray-600 text-gray-200 rounded-lg p-4 focus:ring-2 focus:ring-blue-500 focus:outline-none transition disabled:opacity-60 text-base resize-none"
-                      disabled={isLoadingGeneration}
+                      disabled={isLoadingGeneration || isLoadingConsistency}
                   />
-                  <button
-                      onClick={handleGenerateVideo}
-                      disabled={!editablePrompt.trim() || isLoadingGeneration}
-                      className="w-full flex items-center justify-center bg-gradient-to-br from-blue-600 to-blue-500 text-white font-bold py-4 px-6 rounded-lg transition-all duration-300 ease-in-out shadow-lg shadow-blue-500/20 hover:shadow-xl hover:shadow-blue-500/40 hover:-translate-y-px active:scale-95 active:shadow-inner text-base disabled:from-blue-800 disabled:to-blue-700 disabled:shadow-none disabled:cursor-not-allowed disabled:transform-none"
-                  >
-                      <MagicWandIcon className="w-5 h-5 mr-3" />
-                      2. Generate New Video
-                  </button>
+
+                  {consistencyResult && !isLoadingConsistency && (
+                    <div className={`w-full p-4 rounded-lg animate-fade-in border flex items-center gap-4 ${getScoreColor(consistencyResult.score).bg} ${getScoreColor(consistencyResult.score).border}`}>
+                      <div className={`text-3xl font-bold ${getScoreColor(consistencyResult.score).text}`}>{consistencyResult.score}/100</div>
+                      <div className="flex-1">
+                          <h4 className={`font-semibold ${getScoreColor(consistencyResult.score).text}`}>Consistency Score</h4>
+                          <p className="text-gray-300 text-sm">{consistencyResult.explanation}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <button
+                          onClick={handleTestConsistency}
+                          disabled={!editablePrompt.trim() || isLoadingGeneration || isLoadingConsistency}
+                          className="w-full flex items-center justify-center bg-white/10 border border-white/20 text-gray-200 font-bold py-4 px-6 rounded-lg transition-all duration-200 ease-in-out hover:bg-white/20 hover:border-white/30 active:scale-95 text-base disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                          <CheckCircleIcon className="w-5 h-5 mr-3" />
+                          Test Consistency
+                      </button>
+                      <button
+                          onClick={handleGenerateVideo}
+                          disabled={!editablePrompt.trim() || isLoadingGeneration || isLoadingConsistency}
+                          className="w-full flex items-center justify-center bg-gradient-to-br from-blue-600 to-blue-500 text-white font-bold py-4 px-6 rounded-lg transition-all duration-300 ease-in-out shadow-lg shadow-blue-500/20 hover:shadow-xl hover:shadow-blue-500/40 hover:-translate-y-px active:scale-95 active:shadow-inner text-base disabled:from-blue-800 disabled:to-blue-700 disabled:shadow-none disabled:cursor-not-allowed disabled:transform-none"
+                      >
+                          <MagicWandIcon className="w-5 h-5 mr-3" />
+                          Generate New Video
+                      </button>
+                  </div>
               </div>
             )}
         </div>

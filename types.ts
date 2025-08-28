@@ -9,3 +9,8 @@ export interface AnalysisResult {
   tags: string[];
   cinematicPrompt: string;
 }
+
+export interface ConsistencyResult {
+  score: number; // A score from 0-100
+  explanation: string; // A brief explanation for the score
+}
